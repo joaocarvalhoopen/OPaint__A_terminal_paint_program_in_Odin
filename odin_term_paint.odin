@@ -288,21 +288,27 @@ Winsize :: struct {
    ws_ypixel : c.ushort,
 }
 
-TC_BRKINT  :: 0o000002
-TC_ICRNL   :: 0o000400
-TC_INPCK   :: 0o000020
-TC_ISTRIP  :: 0o000040
-TC_IXON    :: 0o002000
-TC_OPOST   :: 0o000001
-TC_CS8     :: 0o000060
-TC_ECHO    :: 0o000010
-TC_ICANON  :: 0o000002
-TC_IEXTEN  :: 0o100000
-TC_ISIG    :: 0o000001
-TC_VMIN    :: 6
-TC_VTIME   :: 5
-TCSAFLUSH  :: 2
-TIOCGWINSZ :: 0x5413
+TC_BRKINT  :: 0o000002  // Break interrupt - Usefull when we want to disable in RAW mode, to disable the behavier of a SIGINT signal. 
+TC_ICRNL   :: 0o000400  // Convert carriage return ( \r ) to newline ( \n ).
+TC_INPCK   :: 0o000020  // Enable parity checking - Raw mode disables it to avoid interfering with binary input.
+TC_ISTRIP  :: 0o000040  // Strip the 8th bit - Disable so you can receive full 8-bit bytes.
+TC_IXON    :: 0o002000  // Enable software flow control - Enables Ctrl-S / Ctrl-Q ( “stop / continue output”) .
+                        // Raw mode disables this to prevent those keys from freezing input.
+TC_OPOST   :: 0o000001  // Enable output post-processing - Converts \n -> \r\n , Expands tabs .
+                        // Raw mode disables it so output is not altered by the terminal.
+TC_CS8     :: 0o000060  // Use 8-bit characters - Raw mode sets it.
+TC_ECHO    :: 0o000010  // Echo typed characters - Normal mode: keys you type appear on screen. Raw mode disables this.
+TC_ICANON  :: 0o000002  // Canonical mode ( line buffering ) - Input is buffered until Enter is pressed.
+                        // Raw mode disables this so input is immediate.
+TC_IEXTEN  :: 0o100000  // Enable implementation-defined extensions - Ctrl-V ( literal-next ) - Raw mode disables it.
+TC_ISIG    :: 0o000001  // Enable signal generation on special keys.  Ctrl-C -> SIGINT and Ctrl-Z -> SIGTSTP.
+                        // Raw mode disables this so these keys are just bytes.
+TC_VMIN    :: 6         // Controls minimum number of bytes needed for read( ) to return.
+TC_VTIME   :: 5         // Controls timeout in deci-seconds ( 0.1 seconds ).
+TCSAFLUSH  :: 2         //     - Flush pending input and then apply the settings.
+                        //     - Discard unread input
+                        //   Immediately switch to the new terminal mode.
+TIOCGWINSZ :: 0x5413    // Ioctl code used to get the terminal’s window size. Number of Columns and number of Rows.
 
 //
 // C bindings
@@ -341,30 +347,71 @@ enable_raw_mode :: proc ( ) {
         return
     }
     raw := original_termios
+    
+    // BRKINT - No interrupt on break condition
+    // ICRNL  - Disable CR-to-NL translation ( Enter gives \r instead of \n )
+    // INPCK  - Disable parity checking
+    // ISTRIP - Disable stripping 8th bit
+    // IXON   - Disable Ctrl-S / Ctrl-Q flow control
+    
     raw.c_iflag &= ~( c.uint( TC_BRKINT ) |
                       c.uint( TC_ICRNL )  |
                       c.uint( TC_INPCK )  |
                       c.uint( TC_ISTRIP ) |
                       c.uint( TC_IXON ) )
     
+    // Disables output post-processing ( ex:  automatically converting \n -> \r\n )
+    // Raw output = exact bytes you print go to the terminal.
+    
     raw.c_oflag &= ~( c.uint( TC_OPOST ) )
+    
+    // This ensures full 8-bit input ( not 7-bit ASCII ).
     raw.c_cflag |=  ( c.uint( TC_CS8 ) )
+    
+    
+    // ECHO	  - typed characters are not displayed
+    // ICANON -	disable canonical mode -> input is not line-buffered ( you get bytes instantly )
+    // IEXTEN - disable special extensions like Ctrl-V
+    // ISIG   - no signals : Ctrl-C, Ctrl-Z, Ctrl-\ no longer send signals
     
     raw.c_lflag &= ~( c.uint( TC_ECHO )   |
                       c.uint( TC_ICANON ) |
                       c.uint( TC_IEXTEN ) |
                       c.uint( TC_ISIG ) )
     
+    // Set read timeout behavior
+    // VMIN  = 0 : read returns even if no bytes available
+    // VTIME = 1 : timeout = 0.1 seconds
+    
     raw.c_cc[ TC_VMIN ]  = 0
     raw.c_cc[ TC_VTIME ] = 1 
+    
     tcsetattr( fd, c.int( TCSAFLUSH ), & raw )
+    
+    // The last "l" is for low and the last "h" is for high.
+    // ?1000h - Enable basic mouse tracking
+    // ?1002h - Enable mouse button and motion events
+    // ?1006h - Enable SGR extended mouse encoding
+    // ?25l   - Hide cursor
+    
     fmt.print( "\x1b[?1000h\x1b[?1002h\x1b[?1006h\x1b[?25l" ) 
 }
 
 disable_raw_mode :: proc ( ) {
     
     fd := c.int( os.stdin )
+    
+    // This restores the terminal’s original settings using tcsetattr.
+    // How programs disable raw mode that was previously enabled.
     tcsetattr( fd, c.int( TCSAFLUSH ), & original_termios )
+    
+    // The last "l" is for low and the last "h" is for high.
+    // \x1b	    - ESC 
+    // ?1000l	- Disable basic mouse tracking
+    // ?1002l	- Disable button event mouse tracking
+    // ?1006l	- Disable SGR extended mouse reporting
+    // ?25h	    - Show the cursor ( turn cursor visibility ON )
+    
     fmt.print( "\x1b[?1000l\x1b[?1002l\x1b[?1006l\x1b[?25h" ) 
 }
 
@@ -727,6 +774,9 @@ get_braille_mask :: proc ( x : int,
 
 render :: proc( app : ^AppState ) {
     
+    // \x1b   - Esc
+    // [H     - move cursor to top-left, row = 1 and col = 1 . 
+    
     fmt.print( "\x1b[H" )
     sb := strings.builder_make( )
     defer strings.builder_destroy( & sb )
@@ -735,6 +785,10 @@ render :: proc( app : ^AppState ) {
         
         for tx in 0 ..< app.canvas.term_w {
             
+            // Unicode BRAILLE PATTERN BLANK
+            // Looks empty, but it's a Braille cell with no dots.
+            // Each code point from 0x2800 to 0x28FF encodes a Braille cell,
+            // where each of the 8 dots is mapped to a bit in the lower 8 bits of the number.
             base_code := 0x2800
             r, g, b, count := 0, 0, 0, 0
             for py in 0 ..< 4 {
@@ -758,9 +812,20 @@ render :: proc( app : ^AppState ) {
                 r /= count
                 g /= count
                 b /= count
+                
+                // ANSI escape sequence that sets the
+                // foreground text color using 24-bit RGB.
+                // 
+                // \x1b   - ESC
+                // [38    - set foreground color.
+                // 2      - use 24-bit truecolor mode.
+                // R;G;B  - the color components
+
                 fmt.sbprintf( & sb, "\x1b[38;2;%d;%d;%dm", r, g, b )
             } else {
                
+               // Equal to the previous on but with a dark gray color.
+                
                fmt.sbprint( & sb, "\x1b[38;2;60;60;60m" )
             }
 
@@ -768,18 +833,52 @@ render :: proc( app : ^AppState ) {
             
             if tx == cx && ty == cy {
             
+                // ANSI escape sequence that sets the
+                // Background text color using 24-bit RGB.
+                // 
+                // \x1b   - ESC
+                // [48    - set background color.
+                // 2      - use 24-bit truecolor mode.
+                // R;G;B  - the color components
+
+                
                 fmt.sbprint( & sb, "\x1b[48;2;50;50;150m" )
             } else {
                
+               // Reset the background color to the default background.
+               // SGR ( Select Graphic Rendition ) code “49” 
+                
                fmt.sbprint( & sb, "\x1b[49m" )
             }
             
             fmt.sbprint( & sb, rune( base_code ) )
         }
         
+        // Reset all ANSI formatting, resets evry text attribute to default.
+        // Default:
+        //    - foreground color
+        //    - background color
+        //    - bold / dim
+        //    - underline
+        //    - blink
+        //    - italics
+        //    - inverse
+        //    - strikethrough
+        
         fmt.sbprint( & sb, "\x1b[0m\r\n" )
     }
 
+    // ANSI escape sequence that sets the
+    // Background text color using 24-bit RGB.
+    // 
+    // \x1b   - ESC
+    // [48    - set background color.
+    // 2      - use 24-bit truecolor mode.
+    // R;G;B  - the color components.
+    
+    // \x1b   - ESC
+    // [37    - Set foreground ( text ) color to white.
+    
     fmt.sbprint( & sb, "\x1b[48;2;30;30;30m\x1b[37m" ) 
     tool_icon := ICON_PEN
     
@@ -813,6 +912,17 @@ render :: proc( app : ^AppState ) {
         tool_icon = ICON_TEXT
     }
     
+    // ANSI escape sequence that sets the
+    // foreground text color using 24-bit RGB.
+    // 
+    // \x1b   - ESC
+    // [38    - set foreground color.
+    // 2      - use 24-bit truecolor mode.
+    // R;G;B  - the color components
+
+    // \x1b   - ESC
+    // [37    - Set foreground ( text ) color to white.
+    
     fmt.sbprintf( & sb, " %s | Sz:%d | Clr:\x1b[38;2;%d;%d;%dm█\x1b[37m | ",
                   tool_icon, app.brush_size, app.brush_color.r, app.brush_color.g, app.brush_color.b )
     
@@ -823,7 +933,27 @@ render :: proc( app : ^AppState ) {
         fmt.sbprint( & sb, "| TYPE TEXT (Esc to Exit)" )
     }
     
-    fmt.sbprint( & sb, "\x1b[0m\x1b[K\r\n" ) 
+    // Reset all ANSI formatting, resets evry text attribute to default.
+    
+    fmt.sbprint( & sb, "\x1b[0m\x1b[K\r\n" )
+
+    // ANSI escape sequence that sets the
+    // Background text color using 24-bit RGB.
+    // 
+    // \x1b   - ESC
+    // [48    - set background color.
+    // 2      - use 24-bit truecolor mode.
+    // R;G;B  - the color components.
+    
+    // \x1b   - ESC
+    // [33    - Set foreground ( text ) color to yellow.
+    
+    // \x1b   - ESC
+    // [0     - Reset all ANSI formatting, resets evry text attribute to default.
+
+    // \x1b   - ESC
+    // [K     - Erase to end of line
+    
     fmt.sbprintf( & sb, "\x1b[48;2;10;10;10m\x1b[33m %s\x1b[0m\x1b[K", app.status_msg )
     fmt.print( strings.to_string( sb ) )
 
@@ -837,6 +967,12 @@ draw_help_overlay :: proc( h : int,
                            w : int ) {
                                
     r := 4
+    
+    // \x1b   - ESC
+    // [48    - set background color.
+    
+    // \x1b   - ESC
+    // [37    - Set foreground ( text ) color to white.
     
     fmt.printf( "\x1b[%d;5H\x1b[48;2;50;50;50m\x1b[37m┌──────────────────────────────────────┐", r ); r+=1
     fmt.printf( "\x1b[%d;5H│              HELP MENU               │", r ); r+=1
@@ -1023,13 +1159,20 @@ prompt_input :: proc ( app         : ^AppState,
                        string {
     
     disable_raw_mode( )
+    
+    // \x1b   - Esc
+    // [%d;1H - Move cursor to a specific row, column 1.
+    
+    // \x1b   - Esc 
+    // [K     - Erase to end of line.
+    
     fmt.printf( "\x1b[%d;1H\x1b[K%s: ", app.canvas.term_h + 2, prompt_text )
     buf : [ 256 ]u8
     n, _ := os.read( os.stdin, buf[ : ] )
     enable_raw_mode( )
     if n > 0 {
         
-        return strings.trim_space(string(buf[:n]))
+        return strings.trim_space( string( buf[ : n ] ) )
     }
     return ""
 }
@@ -1037,25 +1180,47 @@ prompt_input :: proc ( app         : ^AppState,
 handle_movement :: proc ( app  : ^AppState,
                           data : string ) {
     dx, dy := 0, 0
+    
+    // ANSI escape up arrow -> ends with "A"
+    // ( arrow up = ESC [A )
+    // WASD key "w"
+    // numpad "8" ( “up” position )
+    
     if strings.contains( data, "A" ) || data == "w" || data == "8" {
        
        dy = -1
     }
+    
+    // ANSI down arrow -> ends with "B"
+    // "s" ( WASD )
+    // numpad "2"
     
     if strings.contains( data, "B" ) || data == "s" || data == "2" {
        
        dy = 1
     }
     
+    // Arrow key right ends with "C"
+    // "d" ( WASD )
+    // numpad "6"
+    
     if strings.contains( data, "C" ) || data == "d" || data == "6" {
        
         dx = 1
     }
     
+    // Arrow key left ends with "D"
+    // "a" ( WASD )
+    // numpad "4"
+    
     if strings.contains( data, "D" ) || data == "a" || data == "4" {
        
        dx = -1
     }
+    
+    // UP_LEFT
+    // "7" numpad
+    // Home key ( multiple possible escape codes )
     
     if data == "7" || data == "\x1b[H" || data == "\x1bOH" || data == "\x1b[1~" {
        
@@ -1063,17 +1228,29 @@ handle_movement :: proc ( app  : ^AppState,
        dy = -1
     }
     
+    // UP_RIGHT
+    // "9" numpad
+    // Page Up escape code
+    
     if data == "9" || data == "\x1b[5~" { 
         
         dx = 1
         dy = -1
     }
     
+    // DOWN_LEFT
+    // "1" numpad
+    // End key ( several variants )
+    
     if data == "1" || data == "\x1b[F" || data == "\x1bOF" || data == "\x1b[4~" {
        
         dx = -1
         dy = 1
     }
+    
+    // DOWN_RIGHT
+    // "3" numpad
+    // Page Down
     
     if data == "3" || data == "\x1b[6~" {
        
@@ -1168,6 +1345,7 @@ parse_mouse :: proc ( app  : ^AppState,
             app.shape_start_set = false
             app.status_msg      = "Shape Drawn"
         }
+        
     } else if app.tool_type == .Pen {
         
         if !app.mouse_down { // Start of stroke
@@ -1222,8 +1400,8 @@ main :: proc ( ) {
                      brush_size  = 0
                    }
    
-    // The therm size is only obtained at the beggining of the program,
-    // so we don't support terminal resiziing.
+    // The terminal size is only obtained at the beggining of the program,
+    // so we don't support terminal resizing.
     w, h := get_term_size( )
     init_canvas( & app.canvas, w, h )
     enable_raw_mode( )
@@ -1241,6 +1419,15 @@ main :: proc ( ) {
         data := string( buf[ : n ] )
 
         // Mouse
+        
+        // \x1b - Esc 
+        // [M    - X10 Mouse Event Prefix ( Legacy ) - X10 mouse event reporting code
+        //         Mouse position and buttons pressed.  
+        
+        // \x1b - Esc
+        // [<   - SGR Extended Mouse Reporting.
+        //        This is the newer, more powerful mouse protocol.
+        
         if strings.contains( data, "\x1b[M" ) || strings.contains( data, "\x1b[<" ) {
             
             parse_mouse( & app, data )
