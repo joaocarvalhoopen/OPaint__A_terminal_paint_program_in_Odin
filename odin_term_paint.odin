@@ -221,6 +221,10 @@ AppState :: struct {
     cursor_x : int,
     cursor_y : int,
     
+    // Multi line Text 
+    text_line_first_char_x : int,
+    text_line_first_char_y : int,
+    
     // Tools and State
     tool_type   : ToolType,
     brush_color : Color,
@@ -451,8 +455,10 @@ push_history :: proc( app : ^AppState ) {
     // Save current state to undo
     append( & app.history.undo, clone_canvas_pixels( & app.canvas ) )
 
-    // Limit history size ( 50 )
-    if len( app.history.undo ) > 50 {
+    // Limit history size ( 2000 ). 
+    // This will eat a little bit of more memory :-)
+    // But will give unlimited undo.
+    if len( app.history.undo ) > 2000 {
         
         old := app.history.undo[ 0 ]
         delete( old )
@@ -1441,6 +1447,10 @@ main :: proc ( ) {
                
                app.tool_type = .Pen
                app.status_msg = "Pen Tool"
+               // Clear multi line text support
+               app.text_line_first_char_x = 0
+               app.text_line_first_char_y = 0
+               
             } else if len( data ) == 1 {
                 
                 ch := data[ 0 ]
@@ -1467,6 +1477,13 @@ main :: proc ( ) {
                             }
                         }
                     }
+                } else if ch == 13 { // Enter ( go to next line )
+                    
+                    push_history( & app )
+                    
+                    // Text multi line support                    
+                    app.cursor_x = app.text_line_first_char_x    
+                    app.cursor_y += 8
                 }
             }
             
@@ -1562,6 +1579,9 @@ main :: proc ( ) {
             
             app.tool_type  = app.tool_type == .Text ? .Pen : .Text
             app.status_msg = app.tool_type == .Text ? "Text Tool: Type chars" : "Pen Tool"
+            // Multi line text support
+            app.text_line_first_char_x = app.cursor_x
+            app.text_line_first_char_y = app.cursor_y
         
         } else if data == "n" {
             
