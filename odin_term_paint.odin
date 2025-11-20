@@ -12,13 +12,14 @@
 // - Paint  and erasure with mouse.
 // - Tools:
 //    1. Free line
-//    2. Rectangule
-//    3. Filled rectangule
-//    4. Ellipse
-//    5. Filled Ellipse
-//    6. Text, with support for Backspace
-//    7. Multiple brush sizes
-//    8. Multiple colors
+//    2. Line
+//    3. Rectangule
+//    4. Filled rectangule
+//    5. Ellipse
+//    6. Filled Ellipse
+//    7. Text, with support for Backspace
+//    8. Multiple brush sizes
+//    9. Multiple colors
 // - Save and Load with support for .PPM and .BMP image formats.
 // - Undo and redo.
 // - Help menu with keybindings.
